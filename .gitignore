@@ -1,0 +1,7 @@
+.zig-cache/
+zig-out/
+.graff/
+codedb.snapshot
+output/
+*.sock
+.DS_Store
