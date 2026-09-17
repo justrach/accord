@@ -6,14 +6,22 @@ Wire preface: `ACD1` + version + reserved + `max_frame` (u16le). Frame: `len:u16
 
 Default trust is local Unix sockets with `chmod 0600`. Do not bind this framing on TCP as-is. Both peers on a native socket speak Accord (same as gRPC); HTTP/MCP clients go through a gateway.
 
-Requires Zig 0.15+ (developed on 0.17.0-dev). Licensed under [Apache-2.0](LICENSE).
+Requires Zig 0.15+ (developed on 0.17.0-dev). Licensed under [Apache-2.0](LICENSE). Wire contract: [docs/SPEC.md](docs/SPEC.md) (hex vectors in `zig test`).
 
 ```
 zig test src/accord.zig
+zig build test
 zig build run    # mailbox + live Unix demo
 zig build eval   # framing bakeoff (ReleaseFast)
 zig build load   # concurrent conns + RSS
 zig build real   # agent-shaped live scenarios (chat, stop, bidi, tools, multi-agent, pub/sub loop)
+zig build cross  # graff JSONL vs Unix 0600 vs Mailbox
+```
+
+Soon public: `https://github.com/justrach/accord`
+
+```
+zig fetch --save git+https://github.com/justrach/accord#HEAD
 ```
 
 Numbers below are localhost Unix, same process, ReleaseFast — framing + syscalls, not WAN/TLS/HPACK. `grpc-stream` is HTTP/2 DATA + gRPC prefix only (no per-message HEADERS, no WINDOW_UPDATE). Pipeline trials are interleaved medians of 5.

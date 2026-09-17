@@ -545,6 +545,101 @@ pub const Mailbox = struct {
     }
 };
 
+pub fn kindName(k: Kind) []const u8 {
+    return switch (k) {
+        .ping => "ping",
+        .pong => "pong",
+        .msg => "msg",
+        .ack => "ack",
+        .progress => "progress",
+        .stop => "stop",
+        .close => "close",
+        .goaway => "goaway",
+    };
+}
+
+pub fn parseKind(name: []const u8) DecodeError!Kind {
+    if (std.mem.eql(u8, name, "ping")) return .ping;
+    if (std.mem.eql(u8, name, "pong")) return .pong;
+    if (std.mem.eql(u8, name, "msg")) return .msg;
+    if (std.mem.eql(u8, name, "ack")) return .ack;
+    if (std.mem.eql(u8, name, "progress")) return .progress;
+    if (std.mem.eql(u8, name, "stop")) return .stop;
+    if (std.mem.eql(u8, name, "close")) return .close;
+    if (std.mem.eql(u8, name, "goaway")) return .goaway;
+    return error.BadKind;
+}
+
+const JsonlLine = struct {
+    s: u16,
+    k: []const u8,
+    f: u8 = 0,
+    x: []const u8 = "",
+};
+
+/// Compact NDJSON companion (logs/vectors). Not the Unix wire. Payload is lowercase hex in `x`.
+pub fn writeJsonl(w: *Io.Writer, stream: u16, kind: Kind, flags: Flags, payload: []const u8) !void {
+    const f: u8 = @as(u4, @bitCast(flags));
+    try w.print("{{\"s\":{d},\"k\":\"{s}\",\"f\":{d},\"x\":\"", .{ stream, kindName(kind), f });
+    for (payload) |b| try w.print("{x:0>2}", .{b});
+    try w.writeAll("\"}\n");
+}
+
+pub fn parseJsonl(gpa: std.mem.Allocator, line: []const u8, payload_out: []u8) !Header {
+    const parsed = try std.json.parseFromSlice(JsonlLine, gpa, std.mem.trim(u8, line, " \t\r\n"), .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+    const o = parsed.value;
+    if (o.s >= max_streams) return error.BadStream;
+    if (o.f > 0b0011) return error.BadFlags;
+    if (o.x.len % 2 != 0) return error.BadKind;
+    const body = std.fmt.hexToBytes(payload_out, o.x) catch return error.BadKind;
+    if (body.len > max_payload) return error.PayloadTooLarge;
+    return .{
+        .stream = o.s,
+        .kind = try parseKind(o.k),
+        .flags = @bitCast(@as(u4, @intCast(o.f))),
+        .len = @intCast(body.len),
+    };
+}
+
+test "spec vectors" {
+    var pre: [preface_size]u8 = undefined;
+    encodePreface(&pre);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x41, 0x43, 0x44, 0x31, 0x01, 0x00, 0x00, 0x40 }, &pre);
+
+    var hdr: [header_size]u8 = undefined;
+    var frame: [16]u8 = undefined;
+    var w: Io.Writer = .fixed(&frame);
+    try writeFrame(&w, 1, .msg, .none, "hi");
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x02, 0x00, 0x01, 0x02, 0x68, 0x69 }, frame[0..6]);
+
+    encodeHeader(.{ .stream = 0, .kind = .ping, .flags = .urgent, .len = 0 }, &hdr);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x00, 0x00, 0x00, 0x10 }, &hdr);
+
+    encodeHeader(.{ .stream = 3, .kind = .stop, .flags = .urgent, .len = 0 }, &hdr);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x00, 0x00, 0x03, 0x15 }, &hdr);
+
+    encodeHeader(.{ .stream = 1, .kind = .progress, .flags = .replaceable, .len = 1 }, &hdr);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x01, 0x00, 0x01, 0x24 }, &hdr);
+}
+
+test "jsonl companion" {
+    var buf: [64]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try writeJsonl(&w, 1, .msg, .none, "hi");
+    const line = buf[0..w.end];
+    try std.testing.expectEqualStrings("{\"s\":1,\"k\":\"msg\",\"f\":0,\"x\":\"6869\"}\n", line);
+
+    var payload: [8]u8 = undefined;
+    const h = try parseJsonl(std.testing.allocator, line, &payload);
+    try std.testing.expectEqual(@as(u16, 1), h.stream);
+    try std.testing.expectEqual(Kind.msg, h.kind);
+    try std.testing.expectEqual(@as(u16, 2), h.len);
+    try std.testing.expectEqualSlices(u8, "hi", payload[0..h.len]);
+}
+
 test "header roundtrip" {
     var buf: [header_size]u8 = undefined;
     encodeHeader(.{

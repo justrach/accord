@@ -94,4 +94,23 @@ pub fn build(b: *std.Build) void {
     });
     const real_cmd = b.addRunArtifact(real_exe);
     b.step("real", "Agent-shaped scenarios on a live Unix link").dependOn(&real_cmd.step);
+
+    const cross_accord = b.createModule(.{
+        .root_source_file = b.path("src/accord.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const cross_exe = b.addExecutable(.{
+        .name = "accord-cross",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/crosspid.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "accord", .module = cross_accord },
+            },
+        }),
+    });
+    const cross_cmd = b.addRunArtifact(cross_exe);
+    b.step("cross", "Graff JSONL vs Unix 0600 vs in-process Mailbox").dependOn(&cross_cmd.step);
 }
