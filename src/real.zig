@@ -20,6 +20,7 @@ pub fn main(init: std.process.Init) !void {
     failed += try run("bidi_followup", caseBidiFollowup, io, gpa);
     failed += try run("two_streams", caseTwoStreams, io, gpa);
     failed += try run("think_then_answer", caseThinkThenAnswer, io, gpa);
+    failed += try run("multi_agent", caseMultiAgent, io, gpa);
 
     std.debug.print("\n{d} failed\n", .{failed});
     if (failed != 0) return error.ScenarioFailed;
@@ -361,4 +362,120 @@ fn thinkServer(s: *accord.Session) !void {
     }
     try s.send(1, .msg, .none, answer[0..n]);
     try s.send(1, .close, .urgent, &.{});
+}
+
+const multi_path = "accord-multi.sock";
+const draft_words = [_][]const u8{ "Paris", "is", "the", "capital", "of", "France." };
+
+const Multi = struct {
+    io: Io,
+    gpa: std.mem.Allocator,
+    listener: net.Server,
+    hub: [3]accord.Session,
+    agent: [3]accord.Session,
+
+    fn init(m: *Multi, io: Io, gpa: std.mem.Allocator) !void {
+        Io.Dir.cwd().deleteFile(io, multi_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+        var listener = try accord.listenUnix(io, multi_path);
+        errdefer listener.deinit(io);
+        m.io = io;
+        m.gpa = gpa;
+        m.listener = listener;
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            var cfut = try Io.concurrent(io, connectPath, .{ io, multi_path });
+            const hs = try listener.accept(io);
+            const cs = try cfut.await(io);
+            m.hub[i] = .{ .io = io, .gpa = gpa, .role = .server, .stream = hs };
+            m.agent[i] = .{ .io = io, .gpa = gpa, .role = .client, .stream = cs };
+            var ast = try Io.concurrent(io, startSess, .{&m.agent[i]});
+            try m.hub[i].start();
+            try ast.await(io);
+        }
+    }
+
+    fn deinit(m: *Multi) void {
+        var i: usize = 0;
+        while (i < 3) : (i += 1) {
+            m.agent[i].shutdown();
+            m.hub[i].shutdown();
+        }
+        m.listener.deinit(m.io);
+        Io.Dir.cwd().deleteFile(m.io, multi_path) catch {};
+    }
+};
+
+fn relay(src: *accord.Session, src_stream: u16, dst: *accord.Session, dst_stream: u16) !usize {
+    var n: usize = 0;
+    while (true) {
+        const got = try src.recv(src_stream);
+        defer got.deinit(src.gpa);
+        try dst.send(dst_stream, got.kind, got.flags, got.payload);
+        switch (got.kind) {
+            .close, .ack, .stop => return n,
+            .msg => n += 1,
+            else => {},
+        }
+    }
+}
+
+fn caseMultiAgent(io: Io, gpa: std.mem.Allocator) ![]const u8 {
+    var multi: Multi = undefined;
+    try multi.init(io, gpa);
+    defer multi.deinit();
+
+    var hub_f = try Io.concurrent(io, hubRoute, .{&multi.hub});
+    var res_f = try Io.concurrent(io, researcherAgent, .{&multi.agent[1]});
+    var wr_f = try Io.concurrent(io, writerAgent, .{&multi.agent[2]});
+    const draft = try plannerAgent(&multi.agent[0], gpa);
+    defer gpa.free(draft);
+    try hub_f.await(io);
+    try res_f.await(io);
+    try wr_f.await(io);
+
+    if (!std.mem.eql(u8, draft, "Paris is the capital of France.")) return error.BadDraft;
+    return std.fmt.allocPrint(gpa, "planner→hub→researcher→writer  \"{s}\"", .{draft});
+}
+
+fn hubRoute(hub: *[3]accord.Session) !void {
+    const job = try hub[0].recv(1);
+    defer job.deinit(hub[0].gpa);
+    try hub[1].send(1, .msg, .none, job.payload);
+    _ = try relay(&hub[1], 1, &hub[0], 1);
+
+    const draft_job = try hub[0].recv(3);
+    defer draft_job.deinit(hub[0].gpa);
+    try hub[2].send(1, .msg, .none, draft_job.payload);
+    _ = try relay(&hub[2], 1, &hub[0], 3);
+}
+
+fn plannerAgent(s: *accord.Session, gpa: std.mem.Allocator) ![]u8 {
+    const research = try s.open();
+    try s.send(research, .msg, .none, "capital of France?");
+    const facts = try recvUntilClose(s, research, gpa);
+    defer gpa.free(facts.text);
+    if (!std.mem.eql(u8, facts.text, "Paris")) return error.BadResearch;
+
+    const write = try s.open();
+    try s.send(write, .msg, .none, facts.text);
+    const draft = try recvUntilClose(s, write, gpa);
+    return draft.text;
+}
+
+fn researcherAgent(s: *accord.Session) !void {
+    const q = try s.recv(1);
+    defer q.deinit(s.gpa);
+    try s.send(1, .progress, .replaceable, "searching");
+    try s.send(1, .msg, .none, "Paris");
+    try s.send(1, .close, .urgent, &.{});
+}
+
+fn writerAgent(s: *accord.Session) !void {
+    const q = try s.recv(1);
+    defer q.deinit(s.gpa);
+    if (!std.mem.eql(u8, q.payload, "Paris")) return error.BadBrief;
+    _ = try sendTokens(s, 1, &draft_words, false);
 }
