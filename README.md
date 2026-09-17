@@ -6,7 +6,7 @@ Wire preface: `ACD1` + version + reserved + `max_frame` (u16le). Frame: `len:u16
 
 Default trust is local Unix sockets with `chmod 0600`. Do not bind this framing on TCP as-is. Both peers on a native socket speak Accord (same as gRPC); HTTP/MCP clients go through a gateway.
 
-Requires Zig 0.15+ (developed on 0.17.0-dev).
+Requires Zig 0.15+ (developed on 0.17.0-dev). Licensed under [Apache-2.0](LICENSE).
 
 ```
 zig test src/accord.zig
