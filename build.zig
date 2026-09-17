@@ -30,8 +30,17 @@ pub fn build(b: *std.Build) void {
 
     const mod_tests = b.addTest(.{ .root_module = mod });
     const run_mod_tests = b.addRunArtifact(mod_tests);
+    const peer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/graff_peer.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_peer_tests = b.addRunArtifact(peer_tests);
     const test_step = b.step("test", "Run protocol tests");
     test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_peer_tests.step);
 
     const eval_accord = b.createModule(.{
         .root_source_file = b.path("src/accord.zig"),
