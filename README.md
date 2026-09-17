@@ -83,7 +83,21 @@ Fan-out 1→3 researchers in parallel, then writer: ~7.7 ms to answer (think ove
 
 Framing is ~0.04 ms of a ~7 ms reply. The codec matters for floods, not for one user-visible answer.
 
-Accord itself is **not** pub/sub — it is the duplex link. A hub on top is the broker: agents `SUB` a topic and sleep on `recv`; `PUB` is a `send` that wakes whoever is subscribed. Idle workers are blocked reads (same process, like an idle Claude Code session). If nobody is subscribed, the hub **spawns** the process, it connects, SUBs, and the queued job is delivered (`zig build real` `pubsub_loop`: researcher reawakes for round 2; writer is spawned on first `PUB write`).
+Accord itself is **not** pub/sub — it is the duplex link. A hub on top is the broker: agents `SUB` a topic and sleep on `recv`; `PUB` is a `send` that wakes whoever is subscribed.
+
+The full loop (`zig build real` `pubsub_loop`) is always back to the planner:
+
+![Full planner loop](docs/loop.svg)
+
+1. `PUB research` → sleeping researcher wakes  
+2. `PUB write` → **no subscriber** → hub **spawns** the writer (Claude Code-style)  
+3. `PUB critique` → critic says `revise`  
+4. `PUB write` → same writer process reawakes  
+5. `PUB critique` → `ok` → `BYE`
+
+Graff integration (subagents, MCP gateway, `graff serve`) is sketched in [docs/GRAFF.md](docs/GRAFF.md). Do not patch the graff binary until Accord has a conformance vector.
+
+On floods Accord already leads the duplex and 64 B pipeline bakeoff; 1 KiB is memcpy-bound for everyone. The hub no longer 200 µs-polls — each slot has a blocked `recv` pump into a queue.
 
 ## RSS at many connections
 

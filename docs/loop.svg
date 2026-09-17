@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" width="720" height="300" role="img">
+  <rect width="720" height="300" rx="12" fill="#f8fafc"/>
+  <text x="28" y="32" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="650" fill="#0f172a">Full planner loop</text>
+  <text x="28" y="52" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#64748b">every arrow is PUB on the hub; workers sleep on recv until the next job</text>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" text-anchor="middle">
+    <rect x="280" y="120" width="160" height="52" rx="10" fill="#0f766e"/>
+    <text x="360" y="151" fill="#fff" font-weight="650">planner</text>
+    <rect x="40" y="210" width="130" height="40" rx="8" fill="#6366f1"/>
+    <text x="105" y="235" fill="#fff">researcher</text>
+    <rect x="295" y="210" width="130" height="40" rx="8" fill="#d97706"/>
+    <text x="360" y="235" fill="#fff">writer</text>
+    <rect x="550" y="210" width="130" height="40" rx="8" fill="#7c3aed"/>
+    <text x="615" y="235" fill="#fff">critic</text>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" fill="#334155">
+    <text x="105" y="88" text-anchor="middle">1 research</text>
+    <text x="360" y="88" text-anchor="middle">2 write  ·  4 rewrite</text>
+    <text x="615" y="88" text-anchor="middle">3 / 5 critique</text>
+  </g>
+  <g stroke="#94a3b8" fill="none" stroke-width="1.5">
+    <path d="M300 172 Q 105 172 105 210"/>
+    <path d="M360 172 L360 210"/>
+    <path d="M420 172 Q 615 172 615 210"/>
+  </g>
+  <text x="28" y="280" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#64748b">Results always PUB planner. Writer is spawned on first write; researcher/critic reawake in-process.</text>
+</svg>
