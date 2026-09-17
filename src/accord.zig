@@ -418,6 +418,16 @@ pub const Session = struct {
         return s.channels[stream].inbox.getOne(s.io);
     }
 
+    /// Non-blocking. Returns null if that stream has nothing queued.
+    pub fn tryRecv(s: *Session, stream: u16) !?Incoming {
+        if (stream >= max_streams) return error.BadStream;
+        try s.flush();
+        var buf: [1]Incoming = undefined;
+        const n = try s.channels[stream].inbox.get(s.io, &buf, 0);
+        if (n == 0) return null;
+        return buf[0];
+    }
+
     fn flushLocked(s: *Session) !void {
         if (s.writer.interface.buffered().len == 0) return;
         try s.writer.interface.flush();

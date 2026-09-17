@@ -71,4 +71,18 @@ pub fn build(b: *std.Build) void {
     });
     const load_cmd = b.addRunArtifact(load_exe);
     b.step("load", "Concurrent connection + 8000-pipeline load model").dependOn(&load_cmd.step);
+
+    const real_exe = b.addExecutable(.{
+        .name = "accord-real",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/real.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "accord", .module = mod },
+            },
+        }),
+    });
+    const real_cmd = b.addRunArtifact(real_exe);
+    b.step("real", "Agent-shaped scenarios on a live Unix link").dependOn(&real_cmd.step);
 }

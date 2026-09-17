@@ -13,6 +13,7 @@ zig test src/accord.zig
 zig build run    # mailbox + live Unix demo
 zig build eval   # framing bakeoff (ReleaseFast)
 zig build load   # concurrent conns + RSS
+zig build real   # agent-shaped live scenarios (chat, stop, bidi, tools)
 ```
 
 Numbers below are localhost Unix, same process, ReleaseFast — framing + syscalls, not WAN/TLS/HPACK. `grpc-stream` is HTTP/2 DATA + gRPC prefix only (no per-message HEADERS, no WINDOW_UPDATE). Pipeline trials are interleaved medians of 5.
