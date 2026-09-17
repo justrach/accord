@@ -4,6 +4,10 @@
 //! as gRPC. A process that only has HTTP/MCP talks through a gateway;
 //! in-process agents use Mailbox and never open a socket.
 //!
+//! Duplex realtime link: one always-on socket, many streams, control on
+//! stream 0 (ping/stop/goaway flush now). Data corks into the writer
+//! buffer; `push`+`flush` is the hot path, `send` flushes for the simple API.
+//!
 //! vs gRPC/HTTP/2 DATA path (9 + 5 + kind = 15B overhead):
 //!   Accord data frame is 4 bytes. seq is not on the wire: the stream
 //!   is already reliable and ordered. seq stays a local counter.
@@ -73,48 +77,85 @@ pub const Frame = struct {
 
 pub const DecodeError = error{ BadKind, BadStream, BadFlags, PayloadTooLarge };
 pub const WriteError = Io.Writer.Error || error{ PayloadTooLarge, BadStream };
+pub const ReadError = DecodeError || Io.Reader.Error || error{BufferTooSmall};
 pub const max_mailbox_frames: usize = 4096;
+
+/// Little-endian wire word: len | stream<<16 | kind<<24 | flags<<28.
+pub const Wire = packed struct(u32) {
+    len: u16 = 0,
+    stream: u8 = 0,
+    kind: u4 = 0,
+    flags: u4 = 0,
+};
+
+pub inline fn packHeader(h: Header) u32 {
+    const w: Wire = .{
+        .len = h.len,
+        .stream = @intCast(h.stream),
+        .kind = @intFromEnum(h.kind),
+        .flags = @bitCast(h.flags),
+    };
+    return @bitCast(w);
+}
 
 /// One little-endian store: len | stream<<16 | kind<<24 | flags<<28.
 pub fn encodeHeader(h: Header, out: *[header_size]u8) void {
-    const word = @as(u32, h.len) |
-        (@as(u32, @as(u8, @intCast(h.stream))) << 16) |
-        (@as(u32, @intFromEnum(h.kind)) << 24) |
-        (@as(u32, @as(u4, @bitCast(h.flags))) << 28);
-    std.mem.writeInt(u32, out, word, .little);
+    std.mem.writeInt(u32, out, packHeader(h), .little);
 }
 
 pub fn decodeHeader(bytes: *const [header_size]u8) DecodeError!Header {
-    const word = std.mem.readInt(u32, bytes, .little);
-    const len: u16 = @truncate(word);
-    if (len > max_payload) return error.PayloadTooLarge;
-    const stream: u16 = @as(u8, @truncate(word >> 16));
-    if (stream >= max_streams) return error.BadStream;
-    const kind_u: u4 = @truncate(word >> 24);
-    if (kind_u > @intFromEnum(Kind.goaway)) return error.BadKind;
-    const flags_u: u4 = @truncate(word >> 28);
-    if (flags_u & 0b1100 != 0) return error.BadFlags;
+    return decodeWord(std.mem.readInt(u32, bytes, .little));
+}
+
+pub inline fn decodeWord(word: u32) DecodeError!Header {
+    const w: Wire = @bitCast(word);
+    if (w.len > max_payload or w.stream >= max_streams or
+        w.kind > @intFromEnum(Kind.goaway) or w.flags & 0b1100 != 0)
+    {
+        @branchHint(.unlikely);
+        if (w.len > max_payload) return error.PayloadTooLarge;
+        if (w.stream >= max_streams) return error.BadStream;
+        if (w.kind > @intFromEnum(Kind.goaway)) return error.BadKind;
+        return error.BadFlags;
+    }
     return .{
-        .len = len,
-        .stream = stream,
-        .kind = @enumFromInt(kind_u),
-        .flags = @bitCast(flags_u),
+        .len = w.len,
+        .stream = w.stream,
+        .kind = @enumFromInt(w.kind),
+        .flags = @bitCast(w.flags),
     };
 }
 
-/// Append one frame to a buffered writer (header then payload, no extra copy).
-pub fn writeFrame(w: *Io.Writer, stream: u16, kind: Kind, flags: Flags, payload: []const u8) WriteError!void {
+/// Append one frame: header+payload in a single writer-buffer fill when it fits.
+pub inline fn writeFrame(w: *Io.Writer, stream: u16, kind: Kind, flags: Flags, payload: []const u8) WriteError!void {
     if (payload.len > max_payload) return error.PayloadTooLarge;
     if (stream >= max_streams) return error.BadStream;
-    var hdr: [header_size]u8 = undefined;
-    encodeHeader(.{
+    const word = packHeader(.{
         .stream = stream,
         .kind = kind,
         .flags = flags,
         .len = @intCast(payload.len),
-    }, &hdr);
-    try w.writeAll(&hdr);
-    try w.writeAll(payload);
+    });
+    const total = header_size + payload.len;
+    if (total <= w.buffer.len) {
+        const dest = try w.writableSlice(total);
+        std.mem.writeInt(u32, dest[0..header_size], word, .little);
+        if (payload.len != 0) @memcpy(dest[header_size..], payload);
+        return;
+    }
+    var hdr: [header_size]u8 = undefined;
+    std.mem.writeInt(u32, &hdr, word, .little);
+    var vecs = [_][]const u8{ &hdr, payload };
+    try w.writeVecAll(&vecs);
+}
+
+/// Read one frame into `payload_out`.
+pub inline fn readFrame(r: *Io.Reader, payload_out: []u8) ReadError!Header {
+    const hdr = try r.takeArray(header_size);
+    const h = try decodeHeader(hdr);
+    if (h.len > payload_out.len) return error.BufferTooSmall;
+    if (h.len != 0) try r.readSliceAll(payload_out[0..h.len]);
+    return h;
 }
 
 pub fn controlLenMustBeZero(kind: Kind) bool {
@@ -244,8 +285,8 @@ pub const Session = struct {
     stream: net.Stream,
     reader: net.Stream.Reader = undefined,
     writer: net.Stream.Writer = undefined,
-    read_buf: [4096]u8 = undefined,
-    write_buf: [4096]u8 = undefined,
+    read_buf: [16 * 1024]u8 = undefined,
+    write_buf: [16 * 1024]u8 = undefined,
     channels: [max_streams]Channel = @splat(.{}),
     send_mu: Io.Mutex = .init,
     reader_fut: Io.Future(anyerror!void) = undefined,
@@ -366,7 +407,7 @@ pub const Session = struct {
         var out = try Outgoing.from(s.gpa, stream, kind, flags, seq, bytes);
         defer out.deinit(s.gpa);
         try writeOutgoing(s, out);
-        if (isUrgent(kind, flags) or s.writer.interface.buffered().len >= 1024) {
+        if (isUrgent(kind, flags) or s.writer.interface.buffered().len >= 8192) {
             try s.flushLocked();
         }
     }

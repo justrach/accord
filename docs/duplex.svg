@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" width="720" height="360" role="img" aria-labelledby="t d">
+  <title id="t">Duplex flood 10k each way × 64 B</title>
+  <desc id="d">accord 32.7M, len32 28.6M, grpc-stream 27.6M, grpc-unary 22.4M, json 20.8M, http/1.1 15.5M msgs/s</desc>
+  <rect width="720" height="360" rx="12" fill="#f8fafc"/>
+  <text x="28" y="36" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="650" fill="#0f172a">Duplex realtime · 10 000 msgs each way · 64 B</text>
+  <text x="28" y="56" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#64748b">both peers write and read at once · always-on Unix link · no RPC round-trip</text>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13">
+    <text x="28" y="100" fill="#334155">accord</text>
+    <rect x="140" y="82" width="520" height="26" rx="4" fill="#0f766e"/>
+    <text x="668" y="100" fill="#0f766e" font-weight="650">32.7M</text>
+    <text x="28" y="140" fill="#334155">len32</text>
+    <rect x="140" y="122" width="454" height="26" rx="4" fill="#64748b"/>
+    <text x="602" y="140" fill="#475569" font-weight="650">28.6M</text>
+    <text x="28" y="180" fill="#334155">grpc-stream</text>
+    <rect x="140" y="162" width="438" height="26" rx="4" fill="#6366f1"/>
+    <text x="586" y="180" fill="#4338ca" font-weight="650">27.6M</text>
+    <text x="28" y="220" fill="#334155">grpc-unary</text>
+    <rect x="140" y="202" width="356" height="26" rx="4" fill="#7c3aed"/>
+    <text x="504" y="220" fill="#5b21b6" font-weight="650">22.4M</text>
+    <text x="28" y="260" fill="#334155">json</text>
+    <rect x="140" y="242" width="331" height="26" rx="4" fill="#db2777"/>
+    <text x="479" y="260" fill="#9d174d" font-weight="650">20.8M</text>
+    <text x="28" y="300" fill="#334155">http/1.1</text>
+    <rect x="140" y="282" width="246" height="26" rx="4" fill="#d97706"/>
+    <text x="394" y="300" fill="#b45309" font-weight="650">15.5M</text>
+  </g>
+  <text x="140" y="338" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#94a3b8">msgs/s both directions  ·  Accord ~18% above grpc-stream DATA path</text>
+</svg>

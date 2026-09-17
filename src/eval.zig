@@ -1,11 +1,12 @@
 //! Head-to-head evals on one Unix socket, same payload, same process.
 //!
-//! Not a claim that Accord is "faster than gRPC" in production: this measures
-//! *equivalent local streaming* — framing + syscalls — which is the part we
-//! actually control. Network RTT, TLS, and HPACK would dominate on the WAN.
+//! Local Unix bakeoff against a gRPC DATA-path stand-in (9+5+kind, no HPACK,
+//! no WINDOW_UPDATE). WAN/TLS/HPACK would dominate on the real internet.
+//! Pipeline trials are interleaved medians of 5. Duplex flood is both peers
+//! writing and reading at once — the realtime-link case.
 //!
 //! Protocols:
-//!   accord        8-byte frame (this repo)
+//!   accord        4-byte frame (this repo)
 //!   len32         u32 length + kind + payload
 //!   json          u32 length + {"k":N,"p":"..."}
 //!   http11        persistent HTTP/1.1 Content-Length
@@ -22,6 +23,7 @@ const net = std.Io.net;
 const sock_path = "accord-eval.sock";
 const warmup_n: usize = 200;
 const pipe_n: usize = 20_000;
+const duplex_n: usize = 10_000;
 const ping_n: usize = 2_000;
 const flood_n: usize = 2_000;
 const payload_sizes = [_]usize{ 64, 1024 };
@@ -63,6 +65,7 @@ pub fn main(init: std.process.Init) !void {
     try printWireTable();
     printAnatomy();
     try benchPipeline(io, gpa);
+    try benchDuplex(io, gpa);
     try benchPingPong(io, gpa);
     try benchStopUnderLoad(io, gpa);
     try benchCoalesce(io, gpa);
@@ -152,7 +155,7 @@ fn httpHeaderLen(kind: u8, payload_len: usize) u64 {
 fn writeFrame(w: *Io.Writer, p: Proto, kind: u8, payload: []const u8) !void {
     switch (p) {
         .accord => {
-            const k = std.enums.fromInt(accord.Kind, kind) orelse .msg;
+            const k: accord.Kind = @enumFromInt(kind);
             const flags: accord.Flags = if (kind == kind_stop) .urgent else .none;
             try accord.writeFrame(w, 1, k, flags, payload);
         },
@@ -200,6 +203,21 @@ fn writeH2Headers(w: *Io.Writer, stream_id: u32, end: bool) !void {
 fn writeH2Data(w: *Io.Writer, stream_id: u32, kind: u8, payload: []const u8) !void {
     const msg_len: u32 = @intCast(1 + payload.len);
     const inner: u32 = 5 + msg_len;
+    const total = 9 + 5 + 1 + payload.len;
+    if (total <= w.buffer.len) {
+        const dest = try w.writableSlice(total);
+        dest[0] = @intCast((inner >> 16) & 0xff);
+        dest[1] = @intCast((inner >> 8) & 0xff);
+        dest[2] = @intCast(inner & 0xff);
+        dest[3] = 0;
+        dest[4] = 0;
+        std.mem.writeInt(u32, dest[5..9], stream_id, .big);
+        dest[9] = 0;
+        std.mem.writeInt(u32, dest[10..14], msg_len, .big);
+        dest[14] = kind;
+        if (payload.len != 0) @memcpy(dest[15..], payload);
+        return;
+    }
     var hdr: [9]u8 = undefined;
     hdr[0] = @intCast((inner >> 16) & 0xff);
     hdr[1] = @intCast((inner >> 8) & 0xff);
@@ -219,10 +237,7 @@ fn writeH2Data(w: *Io.Writer, stream_id: u32, kind: u8, payload: []const u8) !vo
 fn readFrame(r: *Io.Reader, p: Proto, payload_out: []u8) !u8 {
     switch (p) {
         .accord => {
-            const hdr = try r.takeArray(accord.header_size);
-            const h = try accord.decodeHeader(hdr);
-            if (h.len > payload_out.len) return error.BufferTooSmall;
-            if (h.len > 0) try r.readSliceAll(payload_out[0..h.len]);
+            const h = try accord.readFrame(r, payload_out);
             return @intFromEnum(h.kind);
         },
         .len32 => {
@@ -339,7 +354,17 @@ fn benchPipeline(io: Io, gpa: std.mem.Allocator) !void {
         const payload = payload_store[0..psz];
         for (all_protos) |p| {
             _ = try runOnce(io, p, warmup_n, payload, false);
-            const ns = try runOnce(io, p, pipe_n, payload, false);
+        }
+        var samples: [all_protos.len][5]i64 = undefined;
+        var trial: usize = 0;
+        while (trial < 5) : (trial += 1) {
+            for (all_protos, 0..) |p, i| {
+                samples[i][trial] = try runOnce(io, p, pipe_n, payload, false);
+            }
+        }
+        for (all_protos, 0..) |p, i| {
+            std.sort.heap(i64, &samples[i], {}, ascI64);
+            const ns = samples[i][2];
             const ms = @as(f64, @floatFromInt(ns)) / 1_000_000.0;
             const msgs = @as(f64, @floatFromInt(pipe_n)) / (ms / 1000.0);
             const bytes = wireBytes(p, kind_msg, payload) * pipe_n;
@@ -352,14 +377,112 @@ fn benchPipeline(io: Io, gpa: std.mem.Allocator) !void {
     std.debug.print("\n", .{});
 }
 
+fn benchDuplex(io: Io, gpa: std.mem.Allocator) !void {
+    _ = gpa;
+    std.debug.print("== Duplex flood ({d} msgs each way, 64B) ==\n", .{duplex_n});
+    std.debug.print("{s:<14} {s:>10} {s:>12} {s:>10}\n", .{ "protocol", "ms", "msgs/s", "MB/s" });
+
+    var payload: [64]u8 = undefined;
+    fillPayload(&payload);
+
+    for (all_protos) |p| {
+        _ = try runDuplex(io, p, 200, &payload);
+        var samples: [3]i64 = undefined;
+        for (&samples) |*s| s.* = try runDuplex(io, p, duplex_n, &payload);
+        std.sort.heap(i64, &samples, {}, ascI64);
+        const ns = samples[1];
+        const ms = @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+        const msgs = @as(f64, @floatFromInt(duplex_n * 2)) / (ms / 1000.0);
+        const bytes = wireBytes(p, kind_msg, &payload) * duplex_n * 2;
+        const mbs = @as(f64, @floatFromInt(bytes)) / (ms / 1000.0) / (1024.0 * 1024.0);
+        std.debug.print("{s:<14} {d:>10.2} {d:>12.0} {d:>10.1}\n", .{
+            p.name(), ms, msgs, mbs,
+        });
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runDuplex(io: Io, p: Proto, n: usize, payload: []const u8) !i64 {
+    var pair = try openPair(io);
+    defer pair.deinit();
+    var server_fut = try Io.concurrent(io, duplexPeer, .{ io, pair.server, p, n, payload });
+    const t0 = nowNs(io);
+    try duplexPeer(io, pair.client, p, n, payload);
+    const dt = nowNs(io) - t0;
+    try server_fut.await(io);
+    return dt;
+}
+
+fn duplexPeer(io: Io, stream: net.Stream, p: Proto, n: usize, payload: []const u8) !void {
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    var writer = stream.writer(io, &wbuf);
+    var scratch: [2048]u8 = undefined;
+    var read_fut = try Io.concurrent(io, duplexRead, .{ &reader.interface, p, n, &scratch });
+    try writeMany(&writer.interface, p, n, payload);
+    try writer.interface.flush();
+    try read_fut.await(io);
+}
+
+fn duplexRead(r: *Io.Reader, p: Proto, n: usize, scratch: *[2048]u8) !void {
+    try readMany(r, p, n, scratch);
+}
+
+fn writeMany(w: *Io.Writer, p: Proto, n: usize, payload: []const u8) !void {
+    switch (p) {
+        .accord => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                try accord.writeFrame(w, 1, .msg, .none, payload);
+            }
+        },
+        .grpc_stream => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                try writeH2Data(w, 1, kind_msg, payload);
+            }
+        },
+        else => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                try writeFrame(w, p, kind_msg, payload);
+            }
+        },
+    }
+}
+
+fn readMany(r: *Io.Reader, p: Proto, n: usize, scratch: []u8) !void {
+    switch (p) {
+        .accord => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                _ = try accord.readFrame(r, scratch);
+            }
+        },
+        .grpc_stream => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                _ = try readH2Data(r, scratch);
+            }
+        },
+        else => {
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                _ = try readFrame(r, p, scratch);
+            }
+        },
+    }
+}
+
 fn runOnce(io: Io, p: Proto, n: usize, payload: []const u8, pingpong: bool) !i64 {
     var pair = try openPair(io);
     defer pair.deinit();
 
     var server_fut = try Io.concurrent(io, pipelineServer, .{ io, pair.server, p, n, pingpong });
 
-    var rbuf: [8192]u8 = undefined;
-    var wbuf: [8192]u8 = undefined;
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
     var reader = pair.client.reader(io, &rbuf);
     var writer = pair.client.writer(io, &wbuf);
     var scratch: [2048]u8 = undefined;
@@ -373,9 +496,7 @@ fn runOnce(io: Io, p: Proto, n: usize, payload: []const u8, pingpong: bool) !i64
             _ = try readFrame(&reader.interface, p, &scratch);
         }
     } else {
-        while (i < n) : (i += 1) {
-            try writeFrame(&writer.interface, p, kind_msg, payload);
-        }
+        try writeMany(&writer.interface, p, n, payload);
         try writer.interface.flush();
         _ = try readFrame(&reader.interface, p, &scratch);
     }
@@ -385,18 +506,21 @@ fn runOnce(io: Io, p: Proto, n: usize, payload: []const u8, pingpong: bool) !i64
 }
 
 fn pipelineServer(io: Io, stream: net.Stream, p: Proto, n: usize, pingpong: bool) !void {
-    var rbuf: [8192]u8 = undefined;
-    var wbuf: [8192]u8 = undefined;
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
     var reader = stream.reader(io, &rbuf);
     var writer = stream.writer(io, &wbuf);
     var scratch: [2048]u8 = undefined;
     var i: usize = 0;
-    while (i < n) : (i += 1) {
-        _ = try readFrame(&reader.interface, p, &scratch);
-        if (pingpong) {
+    if (pingpong) {
+        while (i < n) : (i += 1) {
+            _ = try readFrame(&reader.interface, p, &scratch);
             try writeFrame(&writer.interface, p, kind_ack, "ok");
             try writer.interface.flush();
         }
+    } else {
+        try readMany(&reader.interface, p, n, &scratch);
+        i = n;
     }
     if (!pingpong) {
         try writeFrame(&writer.interface, p, kind_ack, "ok");
@@ -438,8 +562,8 @@ fn runPingLatencies(io: Io, p: Proto, payload: []const u8, lat: []i64) !void {
     defer pair.deinit();
     var server_fut = try Io.concurrent(io, pipelineServer, .{ io, pair.server, p, lat.len, true });
 
-    var rbuf: [8192]u8 = undefined;
-    var wbuf: [8192]u8 = undefined;
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
     var reader = pair.client.reader(io, &rbuf);
     var writer = pair.client.writer(io, &wbuf);
     var scratch: [2048]u8 = undefined;
@@ -488,8 +612,8 @@ fn runStopTrial(io: Io, p: Proto, payload: []const u8) !i64 {
     defer pair.deinit();
     var server_fut = try Io.concurrent(io, stopServer, .{ io, pair.server, p });
 
-    var rbuf: [8192]u8 = undefined;
-    var wbuf: [8192]u8 = undefined;
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
     var reader = pair.client.reader(io, &rbuf);
     var writer = pair.client.writer(io, &wbuf);
     var scratch: [2048]u8 = undefined;
@@ -508,8 +632,8 @@ fn runStopTrial(io: Io, p: Proto, payload: []const u8) !i64 {
 }
 
 fn stopServer(io: Io, stream: net.Stream, p: Proto) !void {
-    var rbuf: [8192]u8 = undefined;
-    var wbuf: [8192]u8 = undefined;
+    var rbuf: [64 * 1024]u8 = undefined;
+    var wbuf: [64 * 1024]u8 = undefined;
     var reader = stream.reader(io, &rbuf);
     var writer = stream.writer(io, &wbuf);
     var scratch: [2048]u8 = undefined;
