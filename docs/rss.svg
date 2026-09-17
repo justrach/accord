@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" width="720" height="380" role="img" aria-labelledby="t d">
+  <title id="t">RSS vs live Unix sessions</title>
+  <desc id="d">1→2.1 MB, 8→3.3, 32→7.3, 64→13.0, 128→24.0. Scaled 8000 conns ≈ 676 MB.</desc>
+  <rect width="720" height="380" rx="12" fill="#f8fafc"/>
+  <text x="28" y="36" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="650" fill="#0f172a">RSS vs live connections</text>
+  <text x="28" y="56" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#64748b">held sessions, then 64 B req/resp · baseline 1.8 MB · sizeof(Session)=11 424 B</text>
+  <line x1="88" y1="80" x2="88" y2="300" stroke="#cbd5e1" stroke-width="1"/>
+  <line x1="88" y1="300" x2="680" y2="300" stroke="#cbd5e1" stroke-width="1"/>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#94a3b8">
+    <line x1="88" y1="300" x2="680" y2="300" stroke="#e2e8f0"/>
+    <text x="78" y="304" text-anchor="end">0</text>
+    <line x1="88" y1="227" x2="680" y2="227" stroke="#e2e8f0"/>
+    <text x="78" y="231" text-anchor="end">8</text>
+    <line x1="88" y1="153" x2="680" y2="153" stroke="#e2e8f0"/>
+    <text x="78" y="157" text-anchor="end">16</text>
+    <line x1="88" y1="80" x2="680" y2="80" stroke="#e2e8f0"/>
+    <text x="78" y="84" text-anchor="end">24</text>
+    <text x="40" y="190" text-anchor="middle" transform="rotate(-90 40 190)" fill="#64748b" font-size="11">RSS MB</text>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#94a3b8">
+    <text x="92" y="318" text-anchor="middle">1</text>
+    <text x="123" y="318" text-anchor="middle">8</text>
+    <text x="228" y="318" text-anchor="middle">32</text>
+    <text x="368" y="318" text-anchor="middle">64</text>
+    <text x="648" y="318" text-anchor="middle">128</text>
+    <text x="384" y="338" text-anchor="middle" fill="#64748b" font-size="11">live connections (client+server in one process)</text>
+  </g>
+  <polyline fill="none" stroke="#0f766e" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"
+    points="92.4,280.8 123,269.8 228,233.1 368,180.8 648,80"/>
+  <polygon fill="#0f766e" fill-opacity="0.12"
+    points="92.4,300 92.4,280.8 123,269.8 228,233.1 368,180.8 648,80 648,300"/>
+  <g fill="#0f766e">
+    <circle cx="92.4" cy="280.8" r="4.5"/>
+    <circle cx="123" cy="269.8" r="4.5"/>
+    <circle cx="228" cy="233.1" r="4.5"/>
+    <circle cx="368" cy="180.8" r="4.5"/>
+    <circle cx="648" cy="80" r="4.5"/>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#0f766e" font-weight="650">
+    <text x="102" y="276">2.1</text>
+    <text x="133" y="266">3.3</text>
+    <text x="238" y="228">7.3</text>
+    <text x="378" y="176">13.0</text>
+    <text x="638" y="68" text-anchor="end">24.0 MB</text>
+  </g>
+  <text x="28" y="364" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#64748b">~86 KB/conn at 128 (thread stacks, not the Session struct). 8000 conns scaled ≈ 676 MB RSS.</text>
+</svg>

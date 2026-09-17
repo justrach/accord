@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" width="720" height="220" role="img" aria-labelledby="t d">
+  <title id="t">Replaceable progress coalescing</title>
+  <desc id="d">2000 replaceable progress + stop: mailbox delivers 2 frames; json/http/grpc without replace would deliver 2001.</desc>
+  <rect width="720" height="220" rx="12" fill="#f8fafc"/>
+  <text x="28" y="36" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="650" fill="#0f172a">Coalesced progress · 2000 updates + stop</text>
+  <text x="28" y="56" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#64748b">in-process mailbox · replaceable flag keeps one pending progress slot per stream</text>
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13">
+    <text x="28" y="108" fill="#334155">json / http / grpc</text>
+    <text x="28" y="124" fill="#94a3b8" font-size="11">no replace</text>
+    <rect x="180" y="92" width="480" height="36" rx="6" fill="#cbd5e1"/>
+    <text x="668" y="116" fill="#475569" font-weight="650">2001</text>
+    <text x="28" y="168" fill="#334155">accord mailbox</text>
+    <text x="28" y="184" fill="#94a3b8" font-size="11">replaceable</text>
+    <rect x="180" y="152" width="8" height="36" rx="4" fill="#0f766e"/>
+    <text x="198" y="176" fill="#0f766e" font-weight="650">2 frames</text>
+  </g>
+</svg>
