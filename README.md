@@ -13,7 +13,7 @@ zig test src/accord.zig
 zig build run    # mailbox + live Unix demo
 zig build eval   # framing bakeoff (ReleaseFast)
 zig build load   # concurrent conns + RSS
-zig build real   # agent-shaped live scenarios (chat, stop, bidi, tools, multi-agent hub)
+zig build real   # agent-shaped live scenarios (chat, stop, bidi, tools, multi-agent, pub/sub loop)
 ```
 
 Numbers below are localhost Unix, same process, ReleaseFast — framing + syscalls, not WAN/TLS/HPACK. `grpc-stream` is HTTP/2 DATA + gRPC prefix only (no per-message HEADERS, no WINDOW_UPDATE). Pipeline trials are interleaved medians of 5.
@@ -82,6 +82,8 @@ Fan-out 1→3 researchers in parallel, then writer: ~7.7 ms to answer (think ove
 ![Time to answer](docs/response.svg)
 
 Framing is ~0.04 ms of a ~7 ms reply. The codec matters for floods, not for one user-visible answer.
+
+Accord itself is **not** pub/sub — it is the duplex link. A hub on top is the broker: agents `SUB` a topic and sleep on `recv`; `PUB` is a `send` that wakes whoever is subscribed. Idle workers are blocked reads (same process, like an idle Claude Code session). If nobody is subscribed, the hub **spawns** the process, it connects, SUBs, and the queued job is delivered (`zig build real` `pubsub_loop`: researcher reawakes for round 2; writer is spawned on first `PUB write`).
 
 ## RSS at many connections
 

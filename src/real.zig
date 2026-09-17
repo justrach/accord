@@ -21,6 +21,7 @@ pub fn main(init: std.process.Init) !void {
     failed += try run("two_streams", caseTwoStreams, io, gpa);
     failed += try run("think_then_answer", caseThinkThenAnswer, io, gpa);
     failed += try run("multi_agent", caseMultiAgent, io, gpa);
+    failed += try run("pubsub_loop", casePubSubLoop, io, gpa);
 
     std.debug.print("\n{d} failed\n", .{failed});
     if (failed != 0) return error.ScenarioFailed;
@@ -478,4 +479,257 @@ fn writerAgent(s: *accord.Session) !void {
     defer q.deinit(s.gpa);
     if (!std.mem.eql(u8, q.payload, "Paris")) return error.BadBrief;
     _ = try sendTokens(s, 1, &draft_words, false);
+}
+
+const bus_path = "accord-bus.sock";
+
+const Topic = enum { none, planner, research, write };
+
+const Slot = struct {
+    hub: accord.Session = undefined,
+    agent: accord.Session = undefined,
+    topic: Topic = .none,
+    live: bool = false,
+};
+
+const Bus = struct {
+    io: Io,
+    gpa: std.mem.Allocator,
+    listener: net.Server,
+    slots: [4]Slot = @splat(.{}),
+    used: usize = 0,
+    writer_fut: ?Io.Future(anyerror!void) = null,
+    wakes: u32 = 0,
+    spawned: bool = false,
+
+    fn initPlannerResearcher(b: *Bus, io: Io, gpa: std.mem.Allocator) !void {
+        Io.Dir.cwd().deleteFile(io, bus_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+        var listener = try accord.listenUnix(io, bus_path);
+        errdefer listener.deinit(io);
+        b.* = .{ .io = io, .gpa = gpa, .listener = listener };
+        try b.acceptAgent(0);
+        try b.acceptAgent(1);
+        b.used = 2;
+    }
+
+    fn acceptAgent(b: *Bus, i: usize) !void {
+        var cfut = try Io.concurrent(b.io, connectPath, .{ b.io, bus_path });
+        const hs = try b.listener.accept(b.io);
+        const cs = try cfut.await(b.io);
+        b.slots[i].hub = .{ .io = b.io, .gpa = b.gpa, .role = .server, .stream = hs };
+        b.slots[i].agent = .{ .io = b.io, .gpa = b.gpa, .role = .client, .stream = cs };
+        b.slots[i].live = true;
+        var ast = try Io.concurrent(b.io, startSess, .{&b.slots[i].agent});
+        try b.slots[i].hub.start();
+        try ast.await(b.io);
+    }
+
+    fn deinit(b: *Bus) void {
+        if (b.writer_fut) |*f| _ = f.await(b.io) catch {};
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            if (!b.slots[i].live) continue;
+            b.slots[i].agent.shutdown();
+            b.slots[i].hub.shutdown();
+        }
+        b.listener.deinit(b.io);
+        Io.Dir.cwd().deleteFile(b.io, bus_path) catch {};
+    }
+
+    fn spawnWriter(b: *Bus) !void {
+        if (b.spawned) return;
+        std.debug.print("  | bus  no writer subscribed — spawn process (reawake)\n", .{});
+        try b.acceptAgent(2);
+        b.used = 3;
+        b.spawned = true;
+        b.writer_fut = try Io.concurrent(b.io, writeWorker, .{&b.slots[2].agent});
+    }
+
+    fn deliver(b: *Bus, topic: Topic, body: []const u8) !u32 {
+        var n: u32 = 0;
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            if (!b.slots[i].live or b.slots[i].topic != topic) continue;
+            try b.slots[i].hub.send(1, .msg, .none, body);
+            n += 1;
+            b.wakes += 1;
+            std.debug.print("  | bus  pub {s} → wake slot {d} ({d} B)\n", .{
+                @tagName(topic), i, body.len,
+            });
+        }
+        return n;
+    }
+};
+
+fn parseTopic(name: []const u8) Topic {
+    if (std.mem.eql(u8, name, "planner")) return .planner;
+    if (std.mem.eql(u8, name, "research")) return .research;
+    if (std.mem.eql(u8, name, "write")) return .write;
+    return .none;
+}
+
+fn splitCmd(payload: []const u8) struct { cmd: []const u8, rest: []const u8 } {
+    const sp = std.mem.indexOfScalar(u8, payload, ' ') orelse return .{ .cmd = payload, .rest = &.{} };
+    return .{ .cmd = payload[0..sp], .rest = payload[sp + 1 ..] };
+}
+
+fn casePubSubLoop(io: Io, gpa: std.mem.Allocator) ![]const u8 {
+    var bus: Bus = undefined;
+    try bus.initPlannerResearcher(io, gpa);
+    defer bus.deinit();
+
+    std.debug.print("  | pub/sub hub  (Accord is the link; hub is the broker)\n", .{});
+    var hub_f = try Io.concurrent(io, hubLoop, .{&bus});
+    var res_f = try Io.concurrent(io, researchWorker, .{&bus.slots[1].agent});
+    const summary = try plannerLoop(&bus.slots[0].agent, gpa);
+    try hub_f.await(io);
+    try res_f.await(io);
+    return summary;
+}
+
+fn hubLoop(b: *Bus) !void {
+    var pending_write: ?[]u8 = null;
+    defer if (pending_write) |p| b.gpa.free(p);
+
+    var bye = false;
+    var idle: u32 = 0;
+    while (!bye and idle < 2000) {
+        var saw = false;
+        var i: usize = 0;
+        while (i < 4) : (i += 1) {
+            if (!b.slots[i].live) continue;
+            const got = b.slots[i].hub.tryRecv(1) catch |err| switch (err) {
+                error.Closed => continue,
+                else => return err,
+            } orelse continue;
+            defer got.deinit(b.gpa);
+            saw = true;
+            idle = 0;
+            if (got.kind == .close or got.kind == .stop) {
+                bye = true;
+                break;
+            }
+            if (got.kind != .msg) continue;
+            const parts = splitCmd(got.payload);
+            if (std.mem.eql(u8, parts.cmd, "SUB")) {
+                b.slots[i].topic = parseTopic(parts.rest);
+                std.debug.print("  | bus  slot {d} SUB {s}\n", .{ i, @tagName(b.slots[i].topic) });
+                if (b.slots[i].topic == .write) {
+                    if (pending_write) |job| {
+                        _ = try b.deliver(.write, job);
+                        b.gpa.free(job);
+                        pending_write = null;
+                    }
+                }
+            } else if (std.mem.eql(u8, parts.cmd, "PUB")) {
+                const inner = splitCmd(parts.rest);
+                const topic = parseTopic(inner.cmd);
+                const n = try b.deliver(topic, inner.rest);
+                if (n == 0 and topic == .write) {
+                    pending_write = try b.gpa.dupe(u8, inner.rest);
+                    try b.spawnWriter();
+                }
+            } else if (std.mem.eql(u8, parts.cmd, "BYE")) {
+                std.debug.print("  | bus  BYE — close workers\n", .{});
+                var j: usize = 1;
+                while (j < 4) : (j += 1) {
+                    if (b.slots[j].live) {
+                        b.slots[j].hub.send(1, .close, .urgent, &.{}) catch {};
+                    }
+                }
+                bye = true;
+            }
+        }
+        if (!saw) {
+            idle += 1;
+            pauseNsBus(b.io);
+        }
+    }
+}
+
+fn pauseNsBus(io: Io) void {
+    Io.sleep(io, .{ .nanoseconds = 200_000 }, .awake) catch {};
+}
+
+fn plannerLoop(s: *accord.Session, gpa: std.mem.Allocator) ![]const u8 {
+    _ = try s.open();
+    try s.send(1, .msg, .none, "SUB planner");
+
+    std.debug.print("  | planner  PUB research (round 1)\n", .{});
+    try s.send(1, .msg, .none, "PUB research capital of France?");
+    const fact = try recvOneMsg(s, gpa);
+    defer gpa.free(fact);
+    if (!std.mem.eql(u8, fact, "Paris")) return error.BadResearch;
+
+    std.debug.print("  | planner  got fact, PUB write (loop back)\n", .{});
+    try s.send(1, .msg, .none, "PUB write Paris");
+    const draft = try recvOneMsg(s, gpa);
+    defer gpa.free(draft);
+    if (!std.mem.eql(u8, draft, "Paris is the capital of France.")) return error.BadDraft;
+
+    std.debug.print("  | planner  PUB research (round 2, reawake researcher)\n", .{});
+    try s.send(1, .msg, .none, "PUB research two cities?");
+    const extra = try recvOneMsg(s, gpa);
+    defer gpa.free(extra);
+    if (!std.mem.eql(u8, extra, "Lyon Marseille")) return error.BadResearch2;
+
+    try s.send(1, .msg, .none, "BYE");
+    return std.fmt.allocPrint(gpa, "loop×2 research + spawned writer  \"{s}\"", .{draft});
+}
+
+fn recvOneMsg(s: *accord.Session, gpa: std.mem.Allocator) ![]u8 {
+    while (true) {
+        const got = try s.recv(1);
+        defer got.deinit(gpa);
+        switch (got.kind) {
+            .msg => return try gpa.dupe(u8, got.payload),
+            .close, .stop, .ack => return error.UnexpectedEnd,
+            else => {},
+        }
+    }
+}
+
+fn researchWorker(s: *accord.Session) !void {
+    _ = try s.open();
+    try s.send(1, .msg, .none, "SUB research");
+    std.debug.print("  | researcher  asleep (blocked recv)\n", .{});
+    var jobs: usize = 0;
+    while (true) {
+        const job = try s.recv(1);
+        defer job.deinit(s.gpa);
+        if (job.kind == .close or job.kind == .stop) {
+            std.debug.print("  | researcher  exit\n", .{});
+            return;
+        }
+        if (job.kind != .msg) continue;
+        jobs += 1;
+        std.debug.print("  | researcher  wake job {d}: \"{s}\"\n", .{ jobs, job.payload });
+        pause(s.io);
+        if (std.mem.indexOf(u8, job.payload, "cities") != null) {
+            try s.send(1, .msg, .none, "PUB planner Lyon Marseille");
+        } else {
+            try s.send(1, .msg, .none, "PUB planner Paris");
+        }
+        std.debug.print("  | researcher  asleep again\n", .{});
+    }
+}
+
+fn writeWorker(s: *accord.Session) anyerror!void {
+    _ = try s.open();
+    try s.send(1, .msg, .none, "SUB write");
+    std.debug.print("  | writer  process up, asleep\n", .{});
+    while (true) {
+        const job = try s.recv(1);
+        defer job.deinit(s.gpa);
+        if (job.kind == .close or job.kind == .stop) {
+            std.debug.print("  | writer  exit\n", .{});
+            return;
+        }
+        if (job.kind != .msg) continue;
+        std.debug.print("  | writer  wake brief=\"{s}\"\n", .{job.payload});
+        try s.send(1, .msg, .none, "PUB planner Paris is the capital of France.");
+    }
 }
