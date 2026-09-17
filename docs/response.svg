@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" width="720" height="360" role="img" aria-labelledby="t d">
+  <title id="t">Simulated time to answer</title>
+  <desc id="d">Sequential hub ~7.1 ms for every codec; fan-out 1→3 ~7.7 ms. Think+tokens dominate.</desc>
+  <rect width="720" height="360" rx="12" fill="#f8fafc"/>
+  <text x="28" y="36" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="650" fill="#0f172a">Time to full answer · 2 ms think + 0.5 ms/token</text>
+  <text x="28" y="56" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#64748b">median of 3 · filled = 1 researcher + writer · outline = fan-out 3 researchers then writer</text>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+    <!-- scale 520px = 8ms -->
+    <text x="28" y="100" fill="#334155">accord</text>
+    <rect x="140" y="84" width="461" height="18" rx="3" fill="#0f766e"/>
+    <rect x="140" y="104" width="500" height="10" rx="2" fill="none" stroke="#0f766e" stroke-width="1.5"/>
+    <text x="668" y="100" fill="#0f766e" font-weight="650">7.09</text>
+    <text x="28" y="140" fill="#334155">len32</text>
+    <rect x="140" y="124" width="458" height="18" rx="3" fill="#64748b"/>
+    <rect x="140" y="144" width="502" height="10" rx="2" fill="none" stroke="#64748b" stroke-width="1.5"/>
+    <text x="668" y="140" fill="#475569" font-weight="650">7.05</text>
+    <text x="28" y="180" fill="#334155">json</text>
+    <rect x="140" y="164" width="463" height="18" rx="3" fill="#db2777"/>
+    <rect x="140" y="184" width="506" height="10" rx="2" fill="none" stroke="#db2777" stroke-width="1.5"/>
+    <text x="668" y="180" fill="#9d174d" font-weight="650">7.12</text>
+    <text x="28" y="220" fill="#334155">http/1.1</text>
+    <rect x="140" y="204" width="462" height="18" rx="3" fill="#d97706"/>
+    <rect x="140" y="224" width="508" height="10" rx="2" fill="none" stroke="#d97706" stroke-width="1.5"/>
+    <text x="668" y="220" fill="#b45309" font-weight="650">7.10</text>
+    <text x="28" y="260" fill="#334155">grpc-stream</text>
+    <rect x="140" y="244" width="464" height="18" rx="3" fill="#6366f1"/>
+    <rect x="140" y="264" width="509" height="10" rx="2" fill="none" stroke="#6366f1" stroke-width="1.5"/>
+    <text x="668" y="260" fill="#4338ca" font-weight="650">7.14</text>
+    <text x="28" y="300" fill="#334155">grpc-unary</text>
+    <rect x="140" y="284" width="460" height="18" rx="3" fill="#7c3aed"/>
+    <rect x="140" y="304" width="504" height="10" rx="2" fill="none" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="668" y="300" fill="#5b21b6" font-weight="650">7.08</text>
+  </g>
+  <text x="140" y="338" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#94a3b8">ms  ·  3 sequential researchers would be ~9.6 ms think; parallel fan-out stays ~1× think</text>
+</svg>

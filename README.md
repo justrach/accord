@@ -49,6 +49,40 @@ Unidirectional flood, one ack. At 64 B Accord edges the gRPC DATA path; at 1 KiB
 
 Ping-pong RTT is ~4.2 µs p50 for every binary codec (syscall floor).
 
+## Multi-agent hub (same shape, every codec)
+
+Planner, hub, researcher(s), writer — the `zig build real` multi_agent topology, but each spoke is framed with Accord / len32 / JSON / HTTP/1.1 / gRPC DATA / gRPC unary. The hub relays; it does not translate.
+
+![Hub topology](docs/hub.svg)
+
+**Framing only** (no think, no token pacing) — this is the protocol tax on that shape:
+
+| protocol | TTFB | research | draft | total |
+|---|---:|---:|---:|---:|
+| accord | 0.02 ms | 0.02 ms | 0.02 ms | 0.04 ms |
+| len32 | 0.02 | 0.02 | 0.02 | 0.04 |
+| json | 0.02 | 0.02 | 0.02 | 0.04 |
+| http/1.1 | 0.02 | 0.02 | 0.02 | 0.04 |
+| grpc-stream | 0.02 | 0.02 | 0.02 | 0.03 |
+| grpc-unary | 0.02 | 0.02 | 0.02 | 0.04 |
+
+**Simulated response** — researcher thinks 2 ms, then 0.5 ms per token (1 fact + 6-word draft). That is the time a user would wait:
+
+| protocol | TTFB | research | draft | **answer** |
+|---|---:|---:|---:|---:|
+| accord | 2.55 ms | 3.20 ms | 3.89 ms | **7.09 ms** |
+| len32 | 2.55 | 3.19 | 3.85 | 7.05 |
+| json | 2.56 | 3.21 | 3.91 | 7.12 |
+| http/1.1 | 2.56 | 3.18 | 3.91 | 7.10 |
+| grpc-stream | 2.57 | 3.22 | 3.92 | 7.14 |
+| grpc-unary | 2.56 | 3.21 | 3.87 | 7.08 |
+
+Fan-out 1→3 researchers in parallel, then writer: ~7.7 ms to answer (think overlaps; 3 sequential researchers would be ~9.6 ms of think alone).
+
+![Time to answer](docs/response.svg)
+
+Framing is ~0.04 ms of a ~7 ms reply. The codec matters for floods, not for one user-visible answer.
+
 ## RSS at many connections
 
 8 000 inflight is not 8 000 `Session`s — a handful of duplex links × many streams. Holding connections is what costs RSS (`Io.concurrent` reader stacks).

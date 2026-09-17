@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" width="720" height="280" role="img" aria-labelledby="t">
+  <title id="t">Multi-agent hub shape</title>
+  <rect width="720" height="280" rx="12" fill="#f8fafc"/>
+  <text x="28" y="32" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="650" fill="#0f172a">Same shape · planner → hub → workers → writer</text>
+  <text x="28" y="52" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#64748b">each spoke is one Unix socket running the codec under test</text>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" text-anchor="middle">
+    <rect x="40" y="110" width="120" height="48" rx="8" fill="#0f766e"/>
+    <text x="100" y="139" fill="#fff" font-weight="650">planner</text>
+    <rect x="300" y="110" width="120" height="48" rx="8" fill="#334155"/>
+    <text x="360" y="139" fill="#fff" font-weight="650">hub</text>
+    <rect x="560" y="44" width="120" height="40" rx="8" fill="#6366f1"/>
+    <text x="620" y="69" fill="#fff">researcher×3</text>
+    <rect x="560" y="178" width="120" height="40" rx="8" fill="#d97706"/>
+    <text x="620" y="203" fill="#fff">writer</text>
+  </g>
+  <g stroke="#94a3b8" stroke-width="1.6" fill="none">
+    <path d="M160 134 H300"/>
+    <path d="M420 134 C480 134 500 64 560 64"/>
+    <path d="M420 134 C480 134 500 198 560 198"/>
+  </g>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" fill="#64748b">
+    <text x="230" y="126">query / draft</text>
+    <text x="470" y="86">fan-out</text>
+    <text x="455" y="210">stream tokens</text>
+  </g>
+  <text x="28" y="258" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#64748b">User-visible time = think + tokens + hops. Framing is the last 0.04 ms.</text>
+</svg>

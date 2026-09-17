@@ -70,6 +70,8 @@ pub fn main(init: std.process.Init) !void {
     try benchStopUnderLoad(io, gpa);
     try benchCoalesce(io, gpa);
     try benchMailbox(io, gpa);
+    try benchHubShape(io, gpa);
+    try benchFanout(io, gpa);
 
     std.debug.print("\nNotes:\n", .{});
     std.debug.print("- grpc-stream is the bidi DATA path only (no HPACK HEADERS per message).\n", .{});
@@ -314,12 +316,13 @@ const Pair = struct {
     listener: net.Server,
     client: net.Stream,
     server: net.Stream,
+    path: []const u8,
 
     fn deinit(p: *Pair) void {
         p.client.close(p.io);
         p.server.close(p.io);
         p.listener.deinit(p.io);
-        Io.Dir.cwd().deleteFile(p.io, sock_path) catch {};
+        Io.Dir.cwd().deleteFile(p.io, p.path) catch {};
     }
 };
 
@@ -329,17 +332,21 @@ fn connectPath(io: Io, path: []const u8) !net.Stream {
 }
 
 fn openPair(io: Io) !Pair {
-    Io.Dir.cwd().deleteFile(io, sock_path) catch |err| switch (err) {
+    return openPairAt(io, sock_path);
+}
+
+fn openPairAt(io: Io, path: []const u8) !Pair {
+    Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
-    const addr = try net.UnixAddress.init(sock_path);
+    const addr = try net.UnixAddress.init(path);
     var listener = try addr.listen(io, .{});
     errdefer listener.deinit(io);
-    var cfut = try Io.concurrent(io, connectPath, .{ io, sock_path });
+    var cfut = try Io.concurrent(io, connectPath, .{ io, path });
     const server = try listener.accept(io);
     const client = try cfut.await(io);
-    return .{ .io = io, .listener = listener, .client = client, .server = server };
+    return .{ .io = io, .listener = listener, .client = client, .server = server, .path = path };
 }
 
 fn benchPipeline(io: Io, gpa: std.mem.Allocator) !void {
@@ -701,4 +708,370 @@ fn benchMailbox(io: Io, gpa: std.mem.Allocator) !void {
 
 fn ascI64(_: void, a: i64, b: i64) bool {
     return a < b;
+}
+
+const think_ns: i64 = 2_000_000;
+const token_ns: i64 = 500_000;
+const research_words = [_][]const u8{"Paris"};
+const draft_words = [_][]const u8{ "Paris", "is", "the", "capital", "of", "France." };
+
+const HubTimes = struct {
+    ttfb_ns: i64,
+    research_ns: i64,
+    draft_ns: i64,
+    total_ns: i64,
+};
+
+fn pauseNs(io: Io, ns: i64) void {
+    Io.sleep(io, .{ .nanoseconds = ns }, .awake) catch {};
+}
+
+fn benchHubShape(io: Io, gpa: std.mem.Allocator) !void {
+    _ = gpa;
+    std.debug.print("\n== Multi-agent hub (planner → researcher → writer) ==\n", .{});
+    std.debug.print("same shape as `zig build real` multi_agent; each hop is this codec\n", .{});
+    try printHubTable(io, false);
+    std.debug.print("\n== Same shape, simulated response (2ms think + 0.5ms/token) ==\n", .{});
+    try printHubTable(io, true);
+}
+
+fn printHubTable(io: Io, paced: bool) !void {
+    std.debug.print("{s:<14} {s:>10} {s:>12} {s:>10} {s:>10}\n", .{
+        "protocol", "ttfb ms", "research ms", "draft ms", "total ms",
+    });
+    for (all_protos) |p| {
+        _ = try runHubShape(io, p, paced);
+        var samples: [3]HubTimes = undefined;
+        for (&samples) |*s| s.* = try runHubShape(io, p, paced);
+        const t = medianHub(samples);
+        std.debug.print("{s:<14} {d:>10.2} {d:>12.2} {d:>10.2} {d:>10.2}\n", .{
+            p.name(),
+            nsMs(t.ttfb_ns),
+            nsMs(t.research_ns),
+            nsMs(t.draft_ns),
+            nsMs(t.total_ns),
+        });
+    }
+}
+
+fn benchFanout(io: Io, gpa: std.mem.Allocator) !void {
+    _ = gpa;
+    std.debug.print("\n== Fan-out 1→3 researchers (parallel) then writer ==\n", .{});
+    std.debug.print("hub broadcasts the query, waits for all three, then drafts\n", .{});
+    std.debug.print("{s:<14} {s:>10} {s:>12} {s:>10} {s:>10}\n", .{
+        "protocol", "ttfb ms", "all-3 ms", "draft ms", "total ms",
+    });
+    for (all_protos) |p| {
+        _ = try runFanout(io, p, true);
+        var samples: [3]HubTimes = undefined;
+        for (&samples) |*s| s.* = try runFanout(io, p, true);
+        const t = medianHub(samples);
+        std.debug.print("{s:<14} {d:>10.2} {d:>12.2} {d:>10.2} {d:>10.2}\n", .{
+            p.name(),
+            nsMs(t.ttfb_ns),
+            nsMs(t.research_ns),
+            nsMs(t.draft_ns),
+            nsMs(t.total_ns),
+        });
+    }
+    std.debug.print("\n", .{});
+}
+
+fn nsMs(ns: i64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn medianHub(samples: [3]HubTimes) HubTimes {
+    var totals = [_]i64{ samples[0].total_ns, samples[1].total_ns, samples[2].total_ns };
+    std.sort.heap(i64, &totals, {}, ascI64);
+    const mid = totals[1];
+    for (samples) |s| {
+        if (s.total_ns == mid) return s;
+    }
+    return samples[0];
+}
+
+fn runHubShape(io: Io, p: Proto, paced: bool) !HubTimes {
+    var pair_p = try openPairAt(io, "accord-hub-p.sock");
+    defer pair_p.deinit();
+    var pair_r = try openPairAt(io, "accord-hub-r.sock");
+    defer pair_r.deinit();
+    var pair_w = try openPairAt(io, "accord-hub-w.sock");
+    defer pair_w.deinit();
+
+    var hub_f = try Io.concurrent(io, hubSeq, .{ io, p, pair_p.server, pair_r.server, pair_w.server });
+    var res_f = try Io.concurrent(io, agentResearcher, .{ io, p, pair_r.client, paced, false });
+    var wr_f = try Io.concurrent(io, agentWriter, .{ io, p, pair_w.client, paced });
+    const times = try agentPlanner(io, p, pair_p.client);
+    try hub_f.await(io);
+    try res_f.await(io);
+    try wr_f.await(io);
+    return times;
+}
+
+fn runFanout(io: Io, p: Proto, paced: bool) !HubTimes {
+    var pair_p = try openPairAt(io, "accord-fo-p.sock");
+    defer pair_p.deinit();
+    var pair_r0 = try openPairAt(io, "accord-fo-r0.sock");
+    defer pair_r0.deinit();
+    var pair_r1 = try openPairAt(io, "accord-fo-r1.sock");
+    defer pair_r1.deinit();
+    var pair_r2 = try openPairAt(io, "accord-fo-r2.sock");
+    defer pair_r2.deinit();
+    var pair_w = try openPairAt(io, "accord-fo-w.sock");
+    defer pair_w.deinit();
+
+    var hub_f = try Io.concurrent(io, hubFanout, .{
+        io, p, pair_p.server, pair_r0.server, pair_r1.server, pair_r2.server, pair_w.server,
+    });
+    var r0 = try Io.concurrent(io, agentResearcher, .{ io, p, pair_r0.client, paced, false });
+    var r1 = try Io.concurrent(io, agentResearcher, .{ io, p, pair_r1.client, paced, false });
+    var r2 = try Io.concurrent(io, agentResearcher, .{ io, p, pair_r2.client, paced, false });
+    var wr_f = try Io.concurrent(io, agentWriter, .{ io, p, pair_w.client, paced });
+    const times = try agentPlanner(io, p, pair_p.client);
+    try hub_f.await(io);
+    try r0.await(io);
+    try r1.await(io);
+    try r2.await(io);
+    try wr_f.await(io);
+    return times;
+}
+
+fn hubSeq(io: Io, p: Proto, planner: net.Stream, researcher: net.Stream, writer: net.Stream) !void {
+    try relayUntilStop(io, p, planner, researcher);
+    try relayUntilStop(io, p, researcher, planner);
+    try relayUntilStop(io, p, planner, writer);
+    try relayUntilStop(io, p, writer, planner);
+}
+
+fn hubFanout(
+    io: Io,
+    p: Proto,
+    planner: net.Stream,
+    r0: net.Stream,
+    r1: net.Stream,
+    r2: net.Stream,
+    writer: net.Stream,
+) !void {
+    var query: [256]u8 = undefined;
+    const q = try recvUntilStopCopy(io, p, planner, &query);
+    try sendMsgStop(io, p, r0, query[0..q]);
+    try sendMsgStop(io, p, r1, query[0..q]);
+    try sendMsgStop(io, p, r2, query[0..q]);
+    try drainUntilStop(io, p, r0);
+    try drainUntilStop(io, p, r1);
+    try drainUntilStop(io, p, r2);
+    try sendMsgStop(io, p, planner, "Paris");
+    var brief: [256]u8 = undefined;
+    const b = try recvUntilStopCopy(io, p, planner, &brief);
+    try sendMsgStop(io, p, writer, brief[0..b]);
+    try relayUntilStop(io, p, writer, planner);
+}
+
+const Got = struct { kind: u8, len: usize };
+
+fn readGot(r: *Io.Reader, p: Proto, buf: []u8) !Got {
+    switch (p) {
+        .accord => {
+            const h = try accord.readFrame(r, buf);
+            return .{ .kind = @intFromEnum(h.kind), .len = h.len };
+        },
+        .len32 => {
+            const lb = try r.takeArray(4);
+            const n = std.mem.readInt(u32, lb, .little);
+            const kind = try r.takeByte();
+            const plen: usize = n - 1;
+            if (plen > buf.len) return error.BufferTooSmall;
+            if (plen > 0) try r.readSliceAll(buf[0..plen]);
+            return .{ .kind = kind, .len = plen };
+        },
+        .json => {
+            const lb = try r.takeArray(4);
+            const n = std.mem.readInt(u32, lb, .little);
+            var jbuf: [accord.max_payload + 32]u8 = undefined;
+            if (n > jbuf.len) return error.BufferTooSmall;
+            try r.readSliceAll(jbuf[0..n]);
+            if (n < 12) return error.BadJson;
+            const kind: u8 = jbuf[5] - '0';
+            const inner = jbuf[10 .. n - 2];
+            if (inner.len > buf.len) return error.BufferTooSmall;
+            @memcpy(buf[0..inner.len], inner);
+            return .{ .kind = kind, .len = inner.len };
+        },
+        .http11 => {
+            var hdr: [256]u8 = undefined;
+            var i: usize = 0;
+            while (i < hdr.len) {
+                hdr[i] = try r.takeByte();
+                i += 1;
+                if (i >= 4 and std.mem.eql(u8, hdr[i - 4 .. i], "\r\n\r\n")) break;
+            }
+            const kind = parseXKind(hdr[0..i]) orelse return error.BadHttp;
+            const clen = parseContentLength(hdr[0..i]) orelse return error.BadHttp;
+            if (clen > buf.len) return error.BufferTooSmall;
+            if (clen > 0) try r.readSliceAll(buf[0..clen]);
+            return .{ .kind = kind, .len = clen };
+        },
+        .grpc_stream => {
+            const hdr = try r.takeArray(9);
+            const inner: u32 = (@as(u32, hdr[0]) << 16) | (@as(u32, hdr[1]) << 8) | hdr[2];
+            if (inner < 5) return error.BadGrpc;
+            const grpc = try r.takeArray(5);
+            const plen = std.mem.readInt(u32, grpc[1..5], .big);
+            const kind = try r.takeByte();
+            const body = plen - 1;
+            if (body > buf.len) return error.BufferTooSmall;
+            if (body > 0) try r.readSliceAll(buf[0..body]);
+            return .{ .kind = kind, .len = body };
+        },
+        .grpc_unary => {
+            _ = try r.takeArray(9);
+            const g = try readGot(r, .grpc_stream, buf);
+            _ = try r.takeArray(9);
+            return g;
+        },
+    }
+}
+
+fn relayUntilStop(io: Io, p: Proto, src: net.Stream, dst: net.Stream) !void {
+    var rbuf: [8192]u8 = undefined;
+    var wbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = src.reader(io, &rbuf);
+    var writer = dst.writer(io, &wbuf);
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        try writeFrame(&writer.interface, p, g.kind, scratch[0..g.len]);
+        try writer.interface.flush();
+        if (g.kind == kind_stop) return;
+    }
+}
+
+fn sendMsgStop(io: Io, p: Proto, stream: net.Stream, payload: []const u8) !void {
+    var wbuf: [8192]u8 = undefined;
+    var writer = stream.writer(io, &wbuf);
+    try writeFrame(&writer.interface, p, kind_msg, payload);
+    try writeFrame(&writer.interface, p, kind_stop, &.{});
+    try writer.interface.flush();
+}
+
+fn drainUntilStop(io: Io, p: Proto, stream: net.Stream) !void {
+    var rbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_stop) return;
+    }
+}
+
+fn recvUntilStopCopy(io: Io, p: Proto, stream: net.Stream, out: []u8) !usize {
+    var rbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    var n: usize = 0;
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_stop) return n;
+        if (g.kind == kind_msg and g.len > 0) {
+            if (n != 0 and n < out.len) {
+                out[n] = ' ';
+                n += 1;
+            }
+            const take = @min(g.len, out.len - n);
+            @memcpy(out[n..][0..take], scratch[0..take]);
+            n += take;
+        }
+    }
+}
+
+fn agentPlanner(io: Io, p: Proto, stream: net.Stream) !HubTimes {
+    var rbuf: [8192]u8 = undefined;
+    var wbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    var writer = stream.writer(io, &wbuf);
+
+    const t0 = nowNs(io);
+    try writeFrame(&writer.interface, p, kind_msg, "capital of France?");
+    try writeFrame(&writer.interface, p, kind_stop, &.{});
+    try writer.interface.flush();
+
+    var ttfb: i64 = 0;
+    var facts: [128]u8 = undefined;
+    var fn_len: usize = 0;
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_msg) {
+            if (ttfb == 0) ttfb = nowNs(io) - t0;
+            if (fn_len != 0 and fn_len < facts.len) {
+                facts[fn_len] = ' ';
+                fn_len += 1;
+            }
+            const take = @min(g.len, facts.len - fn_len);
+            @memcpy(facts[fn_len..][0..take], scratch[0..take]);
+            fn_len += take;
+        }
+        if (g.kind == kind_stop) break;
+    }
+    const research_ns = nowNs(io) - t0;
+
+    try writeFrame(&writer.interface, p, kind_msg, facts[0..fn_len]);
+    try writeFrame(&writer.interface, p, kind_stop, &.{});
+    try writer.interface.flush();
+
+    const draft_t0 = nowNs(io);
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_stop) break;
+    }
+    const total = nowNs(io) - t0;
+    return .{
+        .ttfb_ns = if (ttfb == 0) research_ns else ttfb,
+        .research_ns = research_ns,
+        .draft_ns = nowNs(io) - draft_t0,
+        .total_ns = total,
+    };
+}
+
+fn agentResearcher(io: Io, p: Proto, stream: net.Stream, paced: bool, extra: bool) !void {
+    var rbuf: [8192]u8 = undefined;
+    var wbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    var writer = stream.writer(io, &wbuf);
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_stop) break;
+    }
+    if (paced) {
+        pauseNs(io, think_ns);
+        if (extra) pauseNs(io, think_ns / 4);
+    }
+    for (research_words) |w| {
+        try writeFrame(&writer.interface, p, kind_msg, w);
+        try writer.interface.flush();
+        if (paced) pauseNs(io, token_ns);
+    }
+    try writeFrame(&writer.interface, p, kind_stop, &.{});
+    try writer.interface.flush();
+}
+
+fn agentWriter(io: Io, p: Proto, stream: net.Stream, paced: bool) !void {
+    var rbuf: [8192]u8 = undefined;
+    var wbuf: [8192]u8 = undefined;
+    var scratch: [2048]u8 = undefined;
+    var reader = stream.reader(io, &rbuf);
+    var writer = stream.writer(io, &wbuf);
+    while (true) {
+        const g = try readGot(&reader.interface, p, &scratch);
+        if (g.kind == kind_stop) break;
+    }
+    for (draft_words) |w| {
+        try writeFrame(&writer.interface, p, kind_msg, w);
+        try writer.interface.flush();
+        if (paced) pauseNs(io, token_ns);
+    }
+    try writeFrame(&writer.interface, p, kind_stop, &.{});
+    try writer.interface.flush();
 }
