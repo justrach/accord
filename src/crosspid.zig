@@ -394,4 +394,3 @@ fn benchJsonlBatch(io: Io, gpa: std.mem.Allocator, payload: []const u8, count: u
     const got = jsonlDrain(io, arena_state.allocator(), dir, &off);
     return .{ .ms = msSince(io, t0), .heard = got.len };
 }
-

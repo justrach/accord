@@ -92,7 +92,7 @@ pub inline fn packHeader(h: Header) u32 {
     const w: Wire = .{
         .len = h.len,
         .stream = @intCast(h.stream),
-        .kind = @intFromEnum(h.kind),
+        .kind = @backingInt(h.kind),
         .flags = @bitCast(h.flags),
     };
     return @bitCast(w);
@@ -110,18 +110,18 @@ pub fn decodeHeader(bytes: *const [header_size]u8) DecodeError!Header {
 pub inline fn decodeWord(word: u32) DecodeError!Header {
     const w: Wire = @bitCast(word);
     if (w.len > max_payload or w.stream >= max_streams or
-        w.kind > @intFromEnum(Kind.goaway) or w.flags & 0b1100 != 0)
+        w.kind > @backingInt(Kind.goaway) or w.flags & 0b1100 != 0)
     {
         @branchHint(.unlikely);
         if (w.len > max_payload) return error.PayloadTooLarge;
         if (w.stream >= max_streams) return error.BadStream;
-        if (w.kind > @intFromEnum(Kind.goaway)) return error.BadKind;
+        if (w.kind > @backingInt(Kind.goaway)) return error.BadKind;
         return error.BadFlags;
     }
     return .{
         .len = w.len,
         .stream = w.stream,
-        .kind = @enumFromInt(w.kind),
+        .kind = @fromBackingInt(@intCast(w.kind)),
         .flags = @bitCast(w.flags),
     };
 }

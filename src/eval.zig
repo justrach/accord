@@ -157,7 +157,7 @@ fn httpHeaderLen(kind: u8, payload_len: usize) u64 {
 fn writeFrame(w: *Io.Writer, p: Proto, kind: u8, payload: []const u8) !void {
     switch (p) {
         .accord => {
-            const k: accord.Kind = @enumFromInt(kind);
+            const k: accord.Kind = @fromBackingInt(@intCast(kind));
             const flags: accord.Flags = if (kind == kind_stop) .urgent else .none;
             try accord.writeFrame(w, 1, k, flags, payload);
         },
@@ -240,7 +240,7 @@ fn readFrame(r: *Io.Reader, p: Proto, payload_out: []u8) !u8 {
     switch (p) {
         .accord => {
             const h = try accord.readFrame(r, payload_out);
-            return @intFromEnum(h.kind);
+            return @backingInt(h.kind);
         },
         .len32 => {
             const lb = try r.takeArray(4);
@@ -874,7 +874,7 @@ fn readGot(r: *Io.Reader, p: Proto, buf: []u8) !Got {
     switch (p) {
         .accord => {
             const h = try accord.readFrame(r, buf);
-            return .{ .kind = @intFromEnum(h.kind), .len = h.len };
+            return .{ .kind = @backingInt(h.kind), .len = h.len };
         },
         .len32 => {
             const lb = try r.takeArray(4);

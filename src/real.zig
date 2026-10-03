@@ -136,10 +136,10 @@ fn recvUntilClose(s: *accord.Session, stream: u16, gpa: std.mem.Allocator) !stru
 const capital_words = [_][]const u8{ "The", "capital", "of", "France", "is", "Paris." };
 const followup_words = [_][]const u8{ "Also:", "Lyon,", "Marseille,", "Toulouse." };
 const lorem = [_][]const u8{
-    "lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit",
-    "sed",   "do",    "eiusmod", "tempor", "incididunt", "ut", "labore", "et",
-    "dolore", "magna", "aliqua", "ut", "enim", "ad", "minim", "veniam",
-    "quis",  "nostrud", "exercitation", "ullamco", "laboris", "nisi", "ut", "aliquip",
+    "lorem",  "ipsum",   "dolor",        "sit",     "amet",       "consectetur", "adipiscing", "elit",
+    "sed",    "do",      "eiusmod",      "tempor",  "incididunt", "ut",          "labore",     "et",
+    "dolore", "magna",   "aliqua",       "ut",      "enim",       "ad",          "minim",      "veniam",
+    "quis",   "nostrud", "exercitation", "ullamco", "laboris",    "nisi",        "ut",         "aliquip",
 };
 
 fn caseChatStream(io: Io, gpa: std.mem.Allocator) ![]const u8 {
@@ -147,7 +147,7 @@ fn caseChatStream(io: Io, gpa: std.mem.Allocator) ![]const u8 {
     try pair.init(io, gpa);
     defer pair.deinit();
 
-    var server_fut = try Io.concurrent(io, chatServer, .{ &pair.server });
+    var server_fut = try Io.concurrent(io, chatServer, .{&pair.server});
     const sid = try pair.client.open();
     try pair.client.send(sid, .msg, .none, "What is the capital of France?");
     const got = try recvUntilClose(&pair.client, sid, gpa);
@@ -170,7 +170,7 @@ fn caseStopMidway(io: Io, gpa: std.mem.Allocator) ![]const u8 {
     try pair.init(io, gpa);
     defer pair.deinit();
 
-    var server_fut = try Io.concurrent(io, stopServer, .{ &pair.server });
+    var server_fut = try Io.concurrent(io, stopServer, .{&pair.server});
     const sid = try pair.client.open();
     try pair.client.send(sid, .msg, .none, "write a lot");
 
@@ -211,7 +211,7 @@ fn caseBidiFollowup(io: Io, gpa: std.mem.Allocator) ![]const u8 {
     try pair.init(io, gpa);
     defer pair.deinit();
 
-    var server_fut = try Io.concurrent(io, bidiServer, .{ &pair.server });
+    var server_fut = try Io.concurrent(io, bidiServer, .{&pair.server});
     const a = try pair.client.open();
     try pair.client.send(a, .msg, .none, "capital?");
 
@@ -271,7 +271,7 @@ fn caseTwoStreams(io: Io, gpa: std.mem.Allocator) ![]const u8 {
     try pair.init(io, gpa);
     defer pair.deinit();
 
-    var server_fut = try Io.concurrent(io, twoServer, .{ &pair.server });
+    var server_fut = try Io.concurrent(io, twoServer, .{&pair.server});
     const chat = try pair.client.open();
     const tool = try pair.client.open();
     try pair.client.send(chat, .msg, .none, "what's the weather?");
@@ -318,7 +318,7 @@ fn caseThinkThenAnswer(io: Io, gpa: std.mem.Allocator) ![]const u8 {
     try pair.init(io, gpa);
     defer pair.deinit();
 
-    var server_fut = try Io.concurrent(io, thinkServer, .{ &pair.server });
+    var server_fut = try Io.concurrent(io, thinkServer, .{&pair.server});
     const sid = try pair.client.open();
     try pair.client.send(sid, .msg, .none, "think then answer");
 

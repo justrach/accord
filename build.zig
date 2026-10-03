@@ -45,14 +45,14 @@ pub fn build(b: *std.Build) void {
     const eval_accord = b.createModule(.{
         .root_source_file = b.path("src/accord.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     const eval_exe = b.addExecutable(.{
         .name = "accord-eval",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/eval.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .imports = &.{
                 .{ .name = "accord", .module = eval_accord },
             },
@@ -65,14 +65,14 @@ pub fn build(b: *std.Build) void {
     const load_accord = b.createModule(.{
         .root_source_file = b.path("src/accord.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     const load_exe = b.addExecutable(.{
         .name = "accord-load",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/load.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .imports = &.{
                 .{ .name = "accord", .module = load_accord },
             },
@@ -98,14 +98,14 @@ pub fn build(b: *std.Build) void {
     const cross_accord = b.createModule(.{
         .root_source_file = b.path("src/accord.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     const cross_exe = b.addExecutable(.{
         .name = "accord-cross",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/crosspid.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .imports = &.{
                 .{ .name = "accord", .module = cross_accord },
             },
